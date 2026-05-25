@@ -58,7 +58,10 @@ func KillJob(targetAddr string, jobId int64) (*models.XxlResponse, error) {
 
 	url := targetAddr + "kill"
 	reqBody := models.KillRequest{JobId: jobId}
-	jsonData, _ := json.Marshal(reqBody)
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("JSON Marshal faild: %w", err)
+	}
 
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json")
@@ -67,7 +70,7 @@ func KillJob(targetAddr string, jobId int64) (*models.XxlResponse, error) {
 	resp, err := httpClient.Do(req)
 
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("network failed on kill %w", err)
 	}
 
 	defer resp.Body.Close()
@@ -75,16 +78,25 @@ func KillJob(targetAddr string, jobId int64) (*models.XxlResponse, error) {
 	var Xxlresp models.XxlResponse
 
 	if err := json.NewDecoder(resp.Body).Decode(&Xxlresp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode kill response fail :%w", err)
 	}
 	return &Xxlresp, err
 }
 
-// 跨终端拉取日志
-func FetchLog(targetAddr string, logReq models.LogRequest) (*models.LogResultContent, error) {
+// 跨终端拉取Executor日志
+func FetchLog(targetAddr string, logDataTim int64, logId int64, fromLineNum int, logReq models.LogRequest) (*models.LogResultContent, error) {
 
 	url := targetAddr + "log"
-	jsonData, _ := json.Marshal(logReq)
+
+	reqBody := models.LogRequest{
+		LogDataTim:  logDataTim,
+		LogId:       logId,
+		FromLineNum: fromLineNum,
+	}
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, err
+	}
 
 	req, _ := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	req.Header.Set("Content-Type", "application/json;charset=UTF-8")
@@ -98,16 +110,17 @@ func FetchLog(targetAddr string, logReq models.LogRequest) (*models.LogResultCon
 	defer resp.Body.Close()
 
 	if err := json.NewDecoder(resp.Body).Decode(&Xxlresp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("decode log response faild: %w", err)
 	}
 	if Xxlresp.Code != 200 {
-		return nil, fmt.Errorf("executor exception: %s", Xxlresp.Msg)
+		return nil, fmt.Errorf("Java Executor Error: %s", Xxlresp.Msg)
 	}
 
-	contentBytes, _ := json.Marshal(Xxlresp.Content)
+	contentBytes, err := json.Marshal(Xxlresp.Content)
 
 	var logContent models.LogResultContent
-	_ = json.Unmarshal(contentBytes, &logContent)
-
+	if err := json.Unmarshal(contentBytes, &logContent); err != nil {
+		return nil, fmt.Errorf("parse log content failed: %w", err)
+	}
 	return &logContent, nil
 }

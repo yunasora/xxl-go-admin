@@ -18,11 +18,9 @@ func main() {
 		gin.SetMode(gin.ReleaseMode)
 		r := gin.Default()
 
-		// 路由绑定
 		r.POST("/api/registry", handlers.HandlerRegistry)
-		r.POST("/api/callback", handlers.HandleCallBack) // 假设你放在了 handlers 中
+		r.POST("/api/callback", handlers.HandleCallBack)
 
-		// ---- 今天新增的本地测试调试路由 ----
 		r.POST("/test/kill", func(c *gin.Context) {
 		})
 
@@ -32,16 +30,22 @@ func main() {
 		}
 	}()
 
-	// 3. 模拟生产调度流
 	log.Println("[GO Admin] 启动成功，等待执行器心跳...")
-	time.Sleep(35 * time.Second)
+	time.Sleep(5 * time.Second)
 
 	targetAppName := "xxl-job-executor-sample"
 
 	// 通过注册中心寻址后下发
-	if addr, err := core.RegsC.ElectNode(targetAppName); err == nil {
-		core.SendTrigger(addr)
-	}
+	for {
+		if addr, err := core.RegsC.ElectNode(targetAppName); err == nil {
+			core.SendTrigger(targetAppName)
 
-	select {} // 永久阻塞
+			time.Sleep(3 * time.Second)
+			core.KillJob(addr, 1)
+			break
+		} else {
+			log.Printf("[联调提示] 没能触发下发，原因: %v", err)
+			time.Sleep(3 * time.Second)
+		}
+	}
 }
