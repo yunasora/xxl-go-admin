@@ -2,6 +2,7 @@ package core
 
 import (
 	"fmt"
+	"go-xxl-admin/config"
 	"log"
 	"sync"
 	"time"
@@ -36,7 +37,7 @@ func (rc *RegisterCenter) ElectNode(appName string) (string, error) {
 		addr := key.(string)
 		lastHeartbeat := value.(time.Time)
 
-		if time.Since(lastHeartbeat) > 90*time.Second {
+		if time.Since(lastHeartbeat) > time.Duration(config.Cfg.RegistryTimeout)*time.Second {
 			return true
 		}
 
@@ -67,7 +68,7 @@ func (rc *RegisterCenter) ElectNode(appName string) (string, error) {
 // 清理死亡下线机器
 func (rc *RegisterCenter) StartClearloop() {
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(time.Duration(config.Cfg.RegistryScanInterval) * time.Second)
 		for range ticker.C {
 			rc.store.Range(func(appNameKey, appNameVal interface{}) bool {
 				appName := appNameKey.(string)
@@ -77,7 +78,7 @@ func (rc *RegisterCenter) StartClearloop() {
 					addr := addrKey.(string)
 					lastHeartbeat := addrVal.(time.Time)
 
-					if time.Since(lastHeartbeat) > 90*time.Second {
+					if time.Since(lastHeartbeat) > time.Duration(config.Cfg.RegistryTimeout)*time.Second {
 						log.Printf("[死亡清理] 执行器[%s] 节点:[%s] 长期未发送消息,予以剔除", appName, addr)
 						nodeMap.Delete(addrKey)
 					}

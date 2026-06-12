@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"go-xxl-admin/core"
+	"go-xxl-admin/models"
 	"log"
 	"net/http"
 	"time"
@@ -11,7 +12,7 @@ import (
 
 func HandlerKillJob(c *gin.Context) {
 
-	targetAppName := "xxl-job-executor-sample"
+	targetAppName := "xxl-job-executor-sample" // 测试专用，写死
 
 	go func() {
 		log.Printf("[接口触发],开始为应用: %s,进行节点: 强杀", targetAppName)
@@ -20,7 +21,13 @@ func HandlerKillJob(c *gin.Context) {
 			addr, err := core.RegsC.ElectNode(targetAppName)
 
 			if err == nil {
-				core.SendTrigger(targetAppName)
+
+				testjob := models.JobInfo{
+					ID:              1,
+					ExecutorHandler: "demoJobHandler",
+					ExecutorParam:   "Go callback test",
+				}
+				core.SendTrigger(targetAppName, testjob)
 				time.Sleep(3 * time.Second)
 				core.KillJob(addr, 1)
 				log.Printf("成功为应用: %s 执行强杀", targetAppName)

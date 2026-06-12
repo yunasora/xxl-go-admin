@@ -19,3 +19,12 @@ type CallbackRequest struct {
 	HandleCode  int    `json:"handleCode"` // 200 为成功
 	HandleMsg   string `json:"handleMsg"`
 }
+
+type TriggerParam struct {
+	JobId           int64  `json:"jobId"`
+	ExecutorHandler string `json:"executorHandler"`
+	ExecutorParams  string `json:"executorParams"`
+	LogId           int64  `json:"logId"`
+	LogDateTime     int64  `json:"logDataTime"`
+	GlueType        string `json:"glueType"`
+}

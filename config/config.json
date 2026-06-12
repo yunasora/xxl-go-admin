@@ -1,0 +1,10 @@
+{
+    "server_port": ":8081",
+    "db_path": "xxl_job.db",
+    "gin_mode": "release",
+    "access_token": "default_token",
+    "http_timeout": 5,
+    "registry_scan_interval": 10,
+    "registry_timeout": 90,
+    "scheduler_interval": 1
+}
