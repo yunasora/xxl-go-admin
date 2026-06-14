@@ -7,4 +7,6 @@
     "registry_scan_interval": 10,
     "registry_timeout": 90,
     "scheduler_interval": 1
+   
+
 }

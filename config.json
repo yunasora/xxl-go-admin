@@ -7,5 +7,11 @@
     "http_timeout": 5,
     "registry_scan_interval": 10,
     "registry_timeout": 90,
-    "scheduler_interval": 1
+    "scheduler_interval": 1,
+    "mq_enabled": true,
+    "mq_url": "amqp://guest:guest@localhost:5672/",
+    "mq_queue": "xxl.job.tasks",
+     "redis_enabled": true,
+    "redis_addr": "localhost:6379",
+    "redis_password": "myredispassword"
 }

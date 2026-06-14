@@ -17,6 +17,12 @@ type Config struct {
 	RegistryScanInterval int    `json:"registry_scan_interval"`
 	RegistryTimeout      int    `json:"registry_timeout"`
 	SchedulerInterval    int    `json:"scheduler_interval"`
+	MQEnabled            bool   `json:"mq_enabled"`
+	MQURL                string `json:"mq_url"`
+	MQQueue              string `json:"mq_queue"`
+	RedisEnabled         bool   `json:"redis_enabled"`
+	RedisAddr            string `json:"redis_addr"`
+	RedisPassword        string `json:"redis_password"`
 }
 
 func Load(path string) error {

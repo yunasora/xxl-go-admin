@@ -7,6 +7,7 @@ import (
 	"go-xxl-admin/config"
 	"go-xxl-admin/global"
 	"go-xxl-admin/models"
+	"go-xxl-admin/mq"
 	"log"
 	"net/http"
 	"time"
@@ -16,73 +17,115 @@ func SendTrigger(appName string, job models.JobInfo) {
 
 	log.Printf("[Admin]正在为集群: %s 下发任务", appName)
 
-	targetAddr, err := RegsC.ElectNode(appName)
-	if err != nil {
-		log.Printf("[调度错误],任务中心下发任务终止,%v", err)
+	if config.Cfg.MQEnabled {
+		logRecord := models.JobLog{
+			JobId:           job.ID,
+			ExecutorAddress: appName,
+			ExecutorHandler: job.ExecutorHandler,
+			ExecutorParam:   job.ExecutorParam,
+			TriggerTime:     time.Now(),
+			TriggerCode:     "0",
+			TriggerMsg:      "已入队",
+		}
+
+		global.DB.Create(&logRecord)
+
+		param := models.TriggerParam{
+			JobId:           job.ID,
+			ExecutorHandler: job.ExecutorHandler,
+			ExecutorParams:  job.ExecutorParam,
+			LogId:           logRecord.ID,
+			LogDateTime:     time.Now().UnixMilli(),
+			GlueType:        "BEAN",
+			AppName:         appName,
+		}
+		if err := mq.PublishTask(config.Cfg.MQQueue, param); err != nil {
+
+			log.Printf("[MQ] 发布失败: %v", err)
+			global.DB.Model(&logRecord).Updates(map[string]interface{}{
+				"trigger_code": "500",
+				"trigger_msg":  "MQ发布失败",
+			})
+
+		}
 		return
 	}
 
-	logRecord := models.JobLog{
-		JobId:           job.ID,
-		ExecutorAddress: targetAddr,
-		ExecutorHandler: job.ExecutorHandler,
-		ExecutorParam:   job.ExecutorParam,
-		TriggerTime:     time.Now(),
-		TriggerCode:     "0",
-		TriggerMsg:      "触发中",
+	maxRetry := int(job.ExecutorFailRetryCount) + 1
+	timeout := job.ExecutorTimeout
+
+	if timeout == 0 {
+		timeout = 5
 	}
 
-	global.DB.Create(&logRecord)
+	var logRecord models.JobLog
 
-	param := models.TriggerParam{
-		JobId:           job.ID,
-		ExecutorHandler: job.ExecutorHandler,
-		ExecutorParams:  job.ExecutorParam,
-		LogId:           logRecord.ID,
-		LogDateTime:     time.Now().UnixMilli(),
-		GlueType:        "BEAN",
+	for attempt := 1; attempt <= maxRetry; attempt++ {
+		//选举节点
+		targetAddr, err := RegsC.ElectNode(appName)
+		if err != nil {
+			log.Printf("[重试%d / %d]	选举失败: %v", attempt, maxRetry, err)
+			continue
+		}
+		if attempt == 1 {
+			//首次尝试创建job_log
+			logRecord = models.JobLog{
+				JobId:           job.ID,
+				ExecutorAddress: targetAddr,
+				ExecutorHandler: job.ExecutorHandler,
+				ExecutorParam:   job.ExecutorParam,
+				TriggerTime:     time.Now(),
+				TriggerCode:     "0",
+				TriggerMsg:      "触发中",
+			}
+			global.DB.Create(&logRecord)
+		}
+
+		//拼出请求
+		param := models.TriggerParam{
+			JobId:           job.ID,
+			ExecutorHandler: job.ExecutorHandler,
+			ExecutorParams:  job.ExecutorParam,
+			LogId:           logRecord.ID,
+			LogDateTime:     time.Now().UnixMilli(),
+			GlueType:        "BEAN",
+		}
+
+		jsonData, _ := json.Marshal(param)
+		runUrl := targetAddr + "run"
+		req, _ := http.NewRequest("POST", runUrl, bytes.NewBuffer(jsonData))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("XXL-JOB-ACCESS-TOKEN", config.Cfg.AccessToken)
+
+		//发请求
+		client := &http.Client{Timeout: time.Duration(timeout) * time.Second}
+		resp, err := client.Do(req)
+
+		//判断结果
+		if err == nil && resp.StatusCode == 200 {
+			resp.Body.Close()
+			global.DB.Model(&logRecord).Updates(map[string]interface{}{
+				"trigger_code": "200",
+				"trigger_msg":  "下发成功",
+			})
+			log.Printf("[下发成功] 第%d次尝试,目标: %s", attempt, runUrl)
+			return
+		}
+
+		if resp != nil {
+			resp.Body.Close()
+		}
+
+		if attempt == maxRetry {
+			global.DB.Model(&logRecord).Updates(map[string]interface{}{
+				"trigger_code": "500",
+				"trigger_msg":  "最终失败",
+			})
+		} else {
+			log.Printf("[重试 %d / %d]失败,准备重试....", attempt, maxRetry)
+		}
+
 	}
-
-	jsonData, err := json.Marshal(param)
-
-	//拼装URL
-	runUrl := targetAddr + "run"
-
-	req, err := http.NewRequest("POST", runUrl, bytes.NewBuffer(jsonData))
-
-	if err != nil {
-		fmt.Println("创建请求对象失败")
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("XXL-JOB-ACCESS-TOKEN", config.Cfg.AccessToken)
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Printf("向节点 %s 下发任务失败, %v", runUrl, err)
-		global.DB.Model(&logRecord).Updates(map[string]interface{}{
-			"trigger_code": "500",
-			"trigger_msg":  err.Error(),
-		})
-		return
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == 200 {
-		global.DB.Model(&logRecord).Updates(map[string]interface{}{
-			"trigger_code": "200",
-			"trigger_msg":  "下发成功",
-		})
-		log.Printf("[下发成功] 目标节点: %s", runUrl)
-	} else {
-		global.DB.Model(&logRecord).Updates(map[string]interface{}{
-			"trigger_code": "500",
-			"trigger_msg":  fmt.Sprintf("Executor返回异常: %d", resp.StatusCode),
-		})
-		log.Printf("[下发失败] 目标节点: %s, 状态码: %d", runUrl, resp.StatusCode)
-	}
-
 }
 
 // 强杀执行器

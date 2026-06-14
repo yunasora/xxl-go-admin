@@ -1,9 +1,13 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"go-xxl-admin/config"
+	"go-xxl-admin/redis"
 	"log"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -15,6 +19,11 @@ type RegisterCenter struct {
 }
 
 func (rc *RegisterCenter) StoreNode(appName string, addr string) {
+	if redis.Client != nil {
+		ctx := context.Background()
+		redis.Client.HSet(ctx, "xxl:executors:"+appName, addr, time.Now().Unix())
+		return
+	}
 	actual, _ := rc.store.LoadOrStore(appName, &sync.Map{})
 	nodeMap := actual.(*sync.Map)
 	nodeMap.Store(addr, time.Now())
@@ -24,6 +33,34 @@ func (rc *RegisterCenter) StoreNode(appName string, addr string) {
 var RegsC = &RegisterCenter{}
 
 func (rc *RegisterCenter) ElectNode(appName string) (string, error) {
+
+	if redis.Client != nil {
+		ctx := context.Background()
+		key := "xxl:executors:" + appName
+
+		//HGetAll拿所有节点
+		nodes, _ := redis.Client.HGetAll(ctx, key).Result()
+		if len(nodes) == 0 {
+			return "", fmt.Errorf("没有找到任何属于[%s] 的任何执行器", appName)
+		}
+
+		//过滤超时节点
+		var online []string
+		for addr, tsStr := range nodes {
+			ts, _ := strconv.ParseInt(tsStr, 10, 64)
+			if time.Now().Unix()-ts <= int64(config.Cfg.RegistryTimeout) {
+				online = append(online, addr)
+			}
+		}
+
+		//3 轮询 INCR 原子自增，取模选机器
+		count, _ := redis.Client.Incr(ctx, "xxl:route:"+appName).Result()
+		index := int(count % int64(len(online)))
+		chosen := online[index]
+
+		log.Printf("[Redis负载均衡][%s]	在线数:%d	第[%d]个：%s", appName, len(online), index+1, chosen)
+		return chosen, nil
+	}
 
 	actual, ok := rc.store.Load(appName)
 	if !ok {
@@ -70,6 +107,27 @@ func (rc *RegisterCenter) StartClearloop() {
 	go func() {
 		ticker := time.NewTicker(time.Duration(config.Cfg.RegistryScanInterval) * time.Second)
 		for range ticker.C {
+
+			if redis.Client != nil {
+				ctx := context.Background()
+
+				iter := redis.Client.Scan(ctx, 0, "xxl:executors:*", 0).Iterator()
+				for iter.Next(ctx) {
+					key := iter.Val()
+					appName := strings.TrimPrefix(key, "xxl:executors:")
+
+					nodes, _ := redis.Client.HGetAll(ctx, key).Result()
+					for addr, tsStr := range nodes {
+						ts, _ := strconv.ParseInt(tsStr, 10, 64)
+						if time.Now().Unix()-ts > int64(config.Cfg.RegistryTimeout) {
+							redis.Client.HDel(ctx, key, addr)
+							log.Printf("[Redis死亡清理]	执行器[%s] 节点:[%s] 下线", appName, addr)
+						}
+					}
+				}
+				continue
+			}
+
 			rc.store.Range(func(appNameKey, appNameVal interface{}) bool {
 				appName := appNameKey.(string)
 				nodeMap := appNameVal.(*sync.Map)

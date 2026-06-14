@@ -6,6 +6,8 @@ import (
 	"go-xxl-admin/global"
 	"go-xxl-admin/handlers"
 	"go-xxl-admin/models"
+	"go-xxl-admin/mq"
+	"go-xxl-admin/redis"
 	"log"
 
 	"github.com/gin-gonic/gin"
@@ -39,6 +41,20 @@ func main() {
 	// 1. 启动内存巡逻清理协程
 	core.RegsC.StartClearloop()
 	core.Sched.Start()
+
+	if config.Cfg.MQEnabled {
+		if err := mq.Connect(config.Cfg.MQURL, config.Cfg.MQQueue); err != nil {
+			log.Fatal("MQ链接失败", err)
+		}
+		go mq.StartConsumer(config.Cfg.MQQueue, core.RegsC.ElectNode)
+	}
+
+	if config.Cfg.RedisEnabled {
+		if err := redis.Connect(config.Cfg.RedisAddr, config.Cfg.RedisPassword); err != nil {
+			log.Fatal("Redis链接失败", err)
+		}
+	}
+
 	// 2. 异步启动 Gin 服务
 	r := gin.Default()
 

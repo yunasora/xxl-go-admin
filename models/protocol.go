@@ -27,4 +27,5 @@ type TriggerParam struct {
 	LogId           int64  `json:"logId"`
 	LogDateTime     int64  `json:"logDataTime"`
 	GlueType        string `json:"glueType"`
+	AppName         string `json:"appname"`
 }
