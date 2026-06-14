@@ -57,6 +57,24 @@ func main() {
 
 	// 2. 异步启动 Gin 服务
 	r := gin.Default()
+	r.StaticFile("/", "./web/index.html")
+	r.Static("/web", "./web")
+	r.GET("/api/ui-config", func(c *gin.Context) {
+		c.JSON(200, gin.H{
+			"code": 200,
+			"content": gin.H{
+				"serverPort": config.Cfg.ServerPort,
+				"appName": config.Cfg.AppName,
+				"ginMode": config.Cfg.GinMode,
+				"httpTimeout": config.Cfg.HTTPTimeout,
+				"registryScanInterval": config.Cfg.RegistryScanInterval,
+				"registryTimeout": config.Cfg.RegistryTimeout,
+				"schedulerInterval": config.Cfg.SchedulerInterval,
+				"mqEnabled": config.Cfg.MQEnabled,
+				"redisEnabled": config.Cfg.RedisEnabled,
+			},
+		})
+	})
 
 	r.POST("/api/registry", handlers.HandlerRegistry)
 	r.POST("/api/callback", handlers.HandleCallBack)

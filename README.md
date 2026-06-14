@@ -1,379 +1,202 @@
 # go-xxl-admin
 
-> Go 语言实现的 XXL-JOB 管理控制台（Admin 端），负责执行器注册发现、任务下发调度、执行结果回调收集、以及强杀/日志拉取等运维操作。
+> Go 版轻量 XXL-JOB Admin 调度中心原型。目标是保留 XXL-JOB Admin 的核心调度链路，用更轻、更容易二次开发的 Go 代码实现一个可继续生产增强的调度平台基础。
 
----
+## 项目定位
 
-## 1. 项目概览
+这个项目不是为了 1:1 复刻官方 XXL-JOB Admin，而是做一个 **Go 技术栈下的轻量调度中心内核**。
 
-本项目是 [XXL-JOB](https://www.xuxueli.com/xxl-job/) 分布式任务调度平台中 **Admin（调度中心）** 角色的 Go 语言移植版。它与标准的 Java XXL-JOB Executor（执行器）通过 HTTP + JSON 协议互通，遵循 XXL-JOB 的注册/回调/下发/强杀/日志拉取协议规范。
+当前已经打通核心链路：
 
-### 已实现功能
+```text
+Executor 注册/心跳
+  -> Admin 维护可用节点
+  -> 创建任务
+  -> Scheduler 扫描到期任务
+  -> 选择 Executor
+  -> HTTP 或 MQ 下发 /run
+  -> Executor 回调 /api/callback
+  -> Admin 更新 job_log
+```
+
+适合：
+
+- 学习 XXL-JOB Admin 和 Executor 的协议交互
+- 作为 Go 技术栈下的调度中心二次开发基础
+- 做个人项目、课程项目、PoC 或内部轻量调度平台雏形
+
+不建议当前版本直接用于生产。
+
+## 相比传统 XXL-JOB 的优势
+
+| 优势 | 说明 |
+|------|------|
+| Go 技术栈 | 对 Go 项目和 Go 团队更友好，不依赖 Java/Spring 体系 |
+| 更轻量 | Gin + GORM + SQLite 起步，部署和理解成本低 |
+| 主链路清晰 | 注册、调度、下发、回调、日志代码比较集中，适合学习和改造 |
+| 二次开发空间大 | 不被官方完整控制台和复杂架构绑定，方便改成自己的内部平台 |
+| 前后端更自由 | 前端可完全自定义，目前已使用 React + Vite 单独实现控制台 |
+| 可选 MQ | 已预留 RabbitMQ 异步投递方向，便于把调度决策和任务下发解耦 |
+| 可选 Redis | 已预留 Redis 注册中心和轮询计数，方便后续做多实例增强 |
+| 本地原型友好 | SQLite 模式下可以快速启动和验证核心逻辑 |
+
+一句话：官方 XXL-JOB 更完整；本项目更轻、更容易读、更适合 Go 方向自研扩展。
+
+## 当前不足
+
+| 不足 | 说明 |
+|------|------|
+| 功能不完整 | `job_group`、真实 `job_log` 查询、执行器列表等接口还没补齐 |
+| 鉴权不足 | 有 `access_token` 配置，但 Admin API 还没有统一鉴权中间件 |
+| 生产稳定性不足 | 还缺分布式调度锁、misfire 策略、panic recover、监控告警等能力 |
+| 数据库较轻 | 当前以 SQLite 为主，更适合原型，生产建议支持 MySQL/PostgreSQL |
+| 测试不足 | 单测、集成测试、API 契约测试还需要补 |
+| 兼容性待完善 | 目前只覆盖 XXL-JOB 核心协议链路，不是官方完整替代品 |
+
+## 已实现能力
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
-| 执行器注册 | ✅ | Executor 通过 `/api/registry` 注册到 Admin，持久化到 SQLite + 内存 |
-| 心跳保洁 & 剔除 | ✅ | 后台协程每 10s 扫描，剔除 90s 无心跳的执行器 |
-| 轮询负载均衡 | ✅ | 下发任务时从存活节点中轮询选择 |
-| 任务下发（触发） | ✅ | Admin 向 Executor 的 `/run` 端点 POST 任务参数 |
-| 执行结果回调 | ✅ | Executor 完成后 POST `/api/callback`，Admin 记录结果 |
-| 强杀任务 | ✅ | Admin 向 Executor 的 `/kill` 端点发送终止指令 |
-| 日志拉取 | ✅ | Admin 从 Executor 的 `/log` 端点拉取执行日志 |
-| Cron 调度器 | ❌ | 尚未实现定时触发，目前仅支持手动/API 触发 |
-| Web 管理 UI | ❌ | 尚未实现前端界面 |
+| 执行器注册 | ✅ | `POST /api/registry` |
+| 心跳续约 | ✅ | 刷新执行器 `update_time` |
+| 节点剔除 | ✅ | 后台循环剔除超时节点 |
+| 节点选举 | ✅ | 基于轮询选择 Executor |
+| 任务 CRUD | ✅ | 创建、查询、更新、删除任务 |
+| 启停任务 | ✅ | 启用/停用调度任务 |
+| 调度扫描 | ✅ | 定时扫描到期任务 |
+| HTTP 下发 | ✅ | 调 Executor `/run` |
+| 执行回调 | ✅ | `POST /api/callback` 更新日志 |
+| 强杀任务 | ✅ | 调 Executor `/kill`，当前主要是测试入口 |
+| 日志拉取客户端 | ✅ | 已有调用 Executor `/log` 的客户端能力 |
+| RabbitMQ | ✅ | 可选异步投递任务 |
+| Redis 注册中心 | ✅ | 可选 Redis 维护节点和轮询计数 |
+| React 前端 | ✅ | 已有管理台基础页面 |
+| 登录鉴权 | ❌ | 待做 |
+| 监控告警 | ❌ | 待做 |
+| 分布式调度锁 | ❌ | 待做 |
 
----
+## 技术栈
 
-## 2. 目录结构
+- Go 1.26.2
+- Gin
+- GORM
+- SQLite
+- Redis（可选）
+- RabbitMQ（可选）
+- robfig/cron
+- React + Vite
 
-```
+## 目录结构
+
+```text
 go-xxl-admin/
-├── main.go                  # 应用入口：初始化 DB、启动清理协程、启动 Gin HTTP 服务
-├── go.mod / go.sum          # Go 模块依赖管理
-├── xxl_job.db               # SQLite 数据库文件（运行时生成）
-│
-├── global/                  # 全局共享资源
-│   └── db.go                #   全局 DB 变量 + GORM/SQLite 初始化
-│
-├── models/                  # 数据模型层
-│   ├── protocol.go          #   通信协议 DTO：XxlResponse、RegistryParam、CallbackRequest
-│   ├── client_req.go        #   执行器请求/响应 DTO：KillRequest、LogRequest、LogResultContent
-│   ├── job_info.go          #   job_info 表 GORM 模型（任务定义）
-│   ├── job_log.go           #   job_log 表 GORM 模型（执行日志）
-│   └── job_registry.go      #   job_registry 表 GORM 模型（执行器注册信息）
-│
-├── core/                    # 核心业务逻辑层
-│   ├── registry.go          #   内存注册中心：节点存储、心跳剔除、轮询选举
-│   └── executor.go          #   执行器 HTTP 客户端：下发触发、强杀、日志拉取
-│
-└── handlers/                # HTTP 处理层（Gin 路由控制器）
-    ├── registry.go          #   POST /api/registry — 执行器注册处理
-    ├── callback.go          #   POST /api/callback  — 执行结果回调处理
-    └── KillJob.go           #   POST /test/kill      — 测试强杀手动端点
+├── main.go              # 应用入口、初始化、路由注册
+├── config.json          # 运行配置
+├── xxl_job.db           # SQLite 数据库
+├── config/              # 配置加载
+├── global/              # DB 初始化
+├── core/                # 调度器、注册中心、Executor HTTP 客户端
+├── handlers/            # Gin API handler
+├── models/              # GORM 模型和 XXL 协议 DTO
+├── mq/                  # RabbitMQ 连接、发布、消费
+├── redis/               # Redis 连接
+├── frontend/            # React + Vite 前端源码
+├── web/                 # 前端构建产物，由 Gin 托管
+└── DEVREADME.md         # 个人生产增强版开发排期
 ```
 
----
+## 快速启动
 
-## 3. 整体架构图
+建议本地先关闭 Redis 和 RabbitMQ：
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                         Go XXL-Admin (调度中心)                          │
-│                                                                          │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │                   HTTP Layer (Gin :8081)                          │   │
-│  │                                                                    │   │
-│  │   POST /api/registry ──→ handlers.HandlerRegistry                 │   │
-│  │   POST /api/callback  ──→ handlers.HandleCallBack                 │   │
-│  │   POST /test/kill     ──→ handlers.HandlerKillJob                 │   │
-│  └──────────┬─────────────────────────┬──────────────────────────────┘   │
-│             │                         │                                   │
-│  ┌──────────▼─────────────────────────▼──────────────────────────────┐   │
-│  │                      Core Layer (业务核心)                         │   │
-│  │                                                                    │   │
-│  │  ┌─────────────────────┐  ┌──────────────────────────────────┐   │   │
-│  │  │  RegisterCenter     │  │  Executor HTTP Client             │   │   │
-│  │  │  (registry.go)      │  │  (executor.go)                    │   │   │
-│  │  │                     │  │                                   │   │   │
-│  │  │  • StoreNode()      │  │  • SendTrigger(appName)           │   │   │
-│  │  │  • ElectNode()      │  │    → POST {addr}/run              │   │   │
-│  │  │  • StartClearloop() │  │  • KillJob(addr, jobId)           │   │   │
-│  │  │                     │  │    → POST {addr}/kill             │   │   │
-│  │  │  内存存储:          │  │  • FetchLog(addr, ...)            │   │   │
-│  │  │  sync.Map{          │  │    → POST {addr}/log              │   │   │
-│  │  │    appName → {      │  │                                   │   │   │
-│  │  │      addr → time    │  │  Header: XXL-JOB-ACCESS-TOKEN     │   │   │
-│  │  │    }                │  │  Timeout: 5s                      │   │   │
-│  │  │  }                  │  └──────────────────────────────────┘   │   │
-│  │  └──────────┬──────────┘                                         │   │
-│  │             │                                                     │   │
-│  └─────────────┼─────────────────────────────────────────────────────┘   │
-│                │                                                          │
-│  ┌─────────────▼──────────────────────────────────────────────────────┐   │
-│  │                    Persistence Layer                                │   │
-│  │                                                                     │   │
-│  │  global.DB (GORM + SQLite)                                         │   │
-│  │  ┌──────────────┐ ┌──────────────┐ ┌──────────────────┐           │   │
-│  │  │ job_registry │ │  job_info    │ │    job_log       │           │   │
-│  │  │ (执行器注册) │ │  (任务定义)  │ │   (执行日志)     │           │   │
-│  │  └──────────────┘ └──────────────┘ └──────────────────┘           │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────────────────┘
-
-                                  │
-                                  │  HTTP (JSON)
-                                  │  Header: XXL-JOB-ACCESS-TOKEN: default_token
-                                  │
-           ┌──────────────────────┼──────────────────────┐
-           │                      │                      │
-           ▼                      ▼                      ▼
-   ┌──────────────┐      ┌──────────────┐      ┌──────────────┐
-   │  Executor A  │      │  Executor B  │      │  Executor C  │
-   │  (Java/Go)   │      │  (Java/Go)   │      │  (Java/Go)   │
-   │              │      │              │      │              │
-   │  /run        │      │  /run        │      │  /run        │
-   │  /kill       │      │  /kill       │      │  /kill       │
-   │  /log        │      │  /log        │      │  /log        │
-   └──────────────┘      └──────────────┘      └──────────────┘
+```json
+{
+  "mq_enabled": false,
+  "redis_enabled": false
+}
 ```
 
----
-
-## 4. 核心数据流
-
-### 4.1 执行器注册流程
-
-```
- Executor                    Go Admin                      SQLite
-    │                           │                             │
-    │  POST /api/registry       │                             │
-    │  {                        │                             │
-    │    registryGroup: "app1"  │                             │
-    │    registryKey:   "app1"  │                             │
-    │    registryValue: "http://10.0.0.1:9999/"              │
-    │  }                        │                             │
-    │ ─────────────────────────►│                             │
-    │                           │                             │
-    │                           │  1. 解析 JSON 参数          │
-    │                           │  2. 规范化地址（补尾部 /）   │
-    │                           │  3. Upsert 到 job_registry   │
-    │                           │ ────────────────────────────►│
-    │                           │      (ON CONFLICT 更新       │
-    │                           │       update_time)          │
-    │                           │                             │
-    │                           │  4. StoreNode() 写入内存      │
-    │                           │     RegsC.store[app1][addr]  │
-    │                           │     = time.Now()             │
-    │                           │                             │
-    │  {"code": 200}            │                             │
-    │ ◄─────────────────────────│                             │
-```
-
-### 4.2 任务下发流程
-
-```
-  (API/调度触发)          Go Admin Core             Executor 节点
-       │                       │                         │
-       │  SendTrigger("app1")  │                         │
-       │ ─────────────────────►│                         │
-       │                       │                         │
-       │                       │  1. ElectNode("app1")    │
-       │                       │     扫描存活节点          │
-       │                       │     (心跳<90s)           │
-       │                       │     轮询选择一个 addr    │
-       │                       │                         │
-       │                       │  2. POST {addr}/run      │
-       │                       │  ┌─────────────────────► │
-       │                       │  │ {                     │
-       │                       │  │  jobId: 1,            │
-       │                       │  │  executorHandler:     │
-       │                       │  │    "demoJobHandler",  │
-       │                       │  │  executorParams:      │
-       │                       │  │    "Go callback test",│
-       │                       │  │  logId: 20240420,     │
-       │                       │  │  logDateTime: ...,    │
-       │                       │  │  glueType: "BEAN"     │
-       │                       │  │ }                     │
-       │                       │  └─────────────────────► │
-       │                       │                         │
-       │                       │  Executor 执行任务...     │
-       │                       │                         │
-       │  [下发成功]            │                         │
-       │ ◄─────────────────────│                         │
-```
-
-### 4.3 执行结果回调流程
-
-```
- Executor                         Go Admin
-    │                                 │
-    │  POST /api/callback             │
-    │  [{                             │
-    │    logId: 20240420,             │
-    │    logDateTime: 1690000000000,  │
-    │    handleCode: 200,             │
-    │    handleMsg: "执行成功"         │
-    │  }]                             │
-    │ ───────────────────────────────►│
-    │                                 │
-    │                                 │  1. 解析 []CallbackRequest
-    │                                 │  2. 遍历打印每条的
-    │                                 │     logId + status + msg
-    │                                 │
-    │  {"code": 200}                  │
-    │ ◄───────────────────────────────│
-```
-
-### 4.4 强杀 & 日志拉取流程
-
-```
-  Go Admin Core                     Executor 节点
-       │                                 │
-       │  KillJob(addr, jobId)           │
-       │  POST {addr}/kill               │
-       │  {"jobId": 1}                   │
-       │ ───────────────────────────────►│
-       │                                 │
-       │  {"code":200, "msg":"ok"}       │
-       │ ◄───────────────────────────────│
-       │                                 │
-       │  FetchLog(addr, logDataTim,     │
-       │           logId, fromLineNum)   │
-       │  POST {addr}/log                │
-       │  {"logDataTim":...,             │
-       │   "logId":...,                  │
-       │   "fromLineNum": 1}             │
-       │ ───────────────────────────────►│
-       │                                 │
-       │  {code:200, content: {          │
-       │    fromLineNum: 1,              │
-       │    toLineNum: 50,               │
-       │    isEnd: false,                │
-       │    logContent: "..."            │
-       │  }}                             │
-       │ ◄───────────────────────────────│
-```
-
----
-
-## 5. 数据库设计
-
-### 5.1 `job_registry` — 执行器注册表
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER PK | 自增主键 |
-| registry_group | VARCHAR(50) | 注册分组（复合索引） |
-| registry_key | VARCHAR(255) | 应用名称 / AppName（复合索引） |
-| registry_value | VARCHAR(255) | 执行器地址（唯一索引，如 `http://10.0.0.1:9999/`） |
-| update_time | DATETIME | 最后心跳时间（自动更新） |
-
-> Upsert 策略：`registry_value` 冲突时只更新 `update_time`。
-
-### 5.2 `job_info` — 任务定义表
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER PK | 任务 ID |
-| job_group | INTEGER | 任务分组 |
-| job_desc | VARCHAR(255) | 任务描述 |
-| executor_handler | VARCHAR(255) | 执行器 Handler 名称 |
-| job_cron | VARCHAR(128) | Cron 表达式 |
-| executor_routing_strategy | VARCHAR(50) | 路由策略（默认 FIRST） |
-| executor_param | TEXT | 执行参数 |
-| executor_timeout | INTEGER | 超时时间（秒） |
-| executor_fail_retry_count | INTEGER | 失败重试次数 |
-| trigger_status | INTEGER | 触发状态 |
-| trigger_last_time | BIGINT | 上次触发时间戳 |
-| trigger_next_time | BIGINT | 下次触发时间戳 |
-| create_time / update_time | DATETIME | GORM 自动管理 |
-
-### 5.3 `job_log` — 执行日志表
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| id | INTEGER PK | 日志 ID |
-| job_id | INTEGER | 关联任务 ID |
-| executor_address | VARCHAR(255) | 执行节点地址 |
-| executor_handler | VARCHAR(255) | Handler 名称 |
-| executor_param | TEXT | 执行参数 |
-| trigger_time | DATETIME | 触发时间 |
-| trigger_code / trigger_msg | VARCHAR / TEXT | 触发结果 |
-| handler_time | DATETIME | 执行完成时间 |
-| handler_code / handler_msg | VARCHAR / TEXT | 执行结果 |
-
----
-
-## 6. 技术栈
-
-| 组件 | 技术选型 | 用途 |
-|------|----------|------|
-| Web 框架 | `gin-gonic/gin v1.12` | HTTP 路由、请求绑定、JSON 响应 |
-| ORM | `gorm.io/gorm v1.31` | 数据库 ORM、自动迁移 |
-| 数据库 | SQLite（`gorm.io/driver/sqlite`） | 嵌入式持久化存储 |
-| JSON | Go 标准库 `encoding/json` | 序列化/反序列化 |
-| 并发 | `sync.Map` + goroutine | 线程安全的内存注册中心 + 后台清理 |
-
----
-
-## 7. 启动方式
+启动 Admin：
 
 ```bash
-# 确保 Go 1.26+ 已安装
-cd go-xxl-admin
-
-# 下载依赖
-go mod tidy
-
-# 运行（SQLite 文件 xxl_job.db 会自动创建）
-go run main.go
+go run .
 ```
 
-启动后：
-- Admin 监听 **`:8081`** 端口
-- SQLite 数据库 **`xxl_job.db`** 在项目根目录自动生成
-- 三张表（`job_registry`、`job_info`、`job_log`）自动建表
+默认访问：
 
----
-
-## 8. API 接口
-
-### `POST /api/registry` — 执行器注册
-
-Executor 启动后向 Admin 注册自己的地址。
-
-```json
-// Request
-{
-  "registryGroup": "xxl-job-executor-sample",
-  "registryKey": "xxl-job-executor-sample",
-  "registryValue": "http://192.168.1.100:9999"
-}
-
-// Response
-{ "code": 200 }
+```text
+http://127.0.0.1:8081/
 ```
 
-### `POST /api/callback` — 执行结果回调
+## 前端开发
 
-Executor 完成任务后回报结果（支持批量）。
+安装依赖：
 
-```json
-// Request (数组)
-[{
-  "logId": 20240420,
-  "logDateTime": 1690000000000,
-  "handleCode": 200,
-  "handleMsg": "执行成功"
-}]
-
-// Response
-{ "code": 200 }
+```bash
+npm install
 ```
 
-### `POST /test/kill` — 测试强杀（手动调试用）
+开发模式：
 
-对硬编码的 `xxl-job-executor-sample` 应用：选一个节点 → 下发任务 → 等 3s → 强杀。
-
-```json
-// Response
-{
-  "code": 200,
-  "message": "success",
-  "data": { "targetAppName": "xxl-job-executor-sample" }
-}
+```bash
+npm run dev
 ```
 
----
+构建前端到 `web/`：
 
-## 9. 关键设计决策与状态
+```bash
+npm run build
+```
 
-1. **双写存储（内存 + SQLite）**：注册信息同时写入内存 `sync.Map` 和 SQLite。路由选举查内存（快），数据库作持久备份。注意：清理协程只清内存不清数据库，两者可能不一致。
+Go 服务会通过 `/` 托管 `web/index.html`，通过 `/web/*` 托管静态资源。
 
-2. **硬编码配置**：当前所有配置（端口、超时时间、Token、目标应用名）均硬编码在各 `.go` 文件中，无外部配置文件。
+## 主要 API
 
-3. **XXL-JOB 协议兼容**：Admin 与 Executor 之间使用标准 XXL-JOB HTTP 协议（`/run`、`/kill`、`/log` 端点 + `XXL-JOB-ACCESS-TOKEN` 认证头），可与 Java 版 Executor 互通。
+### Executor 协议相关
 
-4. **调度器缺失**：`job_info` 表已设计好 cron 字段，但尚未实现 cron 解析和定时触发逻辑。当前任务下发仅支持程序内调用 `SendTrigger()` 或通过 `/test/kill` 间接触发。
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/registry` | Executor 注册/心跳 |
+| `POST` | `/api/callback` | Executor 执行结果回调 |
 
-5. **轮询负载均衡**：`ElectNode()` 使用全局递增计数器对存活节点数取模的方式实现轮询，简单有效。
+### 任务管理
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `POST` | `/api/job` | 创建任务 |
+| `GET` | `/api/job` | 查询任务列表 |
+| `GET` | `/api/job/:id` | 查询单个任务 |
+| `PUT` | `/api/job/:id` | 更新任务 |
+| `DELETE` | `/api/job/:id` | 删除任务 |
+| `PUT` | `/api/job/:id/start` | 启用任务 |
+| `PUT` | `/api/job/:id/stop` | 停用任务 |
+
+### UI 配置
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/ui-config` | 前端读取部分运行配置 |
+
+## 创建任务前的注意事项
+
+当前还没有 `job_group` 管理接口，所以创建任务前需要先准备一条 `job_group` 数据，并保证：
+
+```text
+job_group.app_name = Executor 注册时的 registryKey
+job_info.job_group = job_group.id
+```
+
+这是后续生产增强版里优先要补的能力。
+
+## 后续计划
+
+详细个人开发排期见 [DEVREADME.md](DEVREADME.md)。
+
+优先级概括：
+
+```text
+P0: job_group / job_log / executor 查询 / bugfix
+P1: 登录鉴权 / 手动触发 / 失败重试 / 日志拉取
+P2: 分布式调度锁 / 调度器健壮性 / 监控告警
+P3: 审计 / 多数据库 / 测试 / 文档
+```

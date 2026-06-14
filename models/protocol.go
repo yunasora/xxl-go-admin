@@ -3,7 +3,7 @@ package models
 // 全局通用返回结构
 type XxlResponse struct {
 	Code    int         `json:"code"`
-	Msg     string      `json:"msg"`
+	Msg     string      `json:"msg,omitempty"`
 	Content interface{} `json:"content,omitempty"`
 }
 
